@@ -87,6 +87,8 @@ static __inline void gcov_flush_unlock() {
  * --- GCOV file format I/O primitives ---
  */
 
+static void unmap_file();
+
 /*
  * The current file name we're outputting. Used primarily for error logging.
  */
@@ -183,12 +185,20 @@ static void fn_list_remove(struct fn_list* list) {
 }
 
 static void resize_write_buffer(uint64_t size) {
-  if (!new_file) return;
   size += cur_pos;
-  if (size <= cur_buffer_size) return;
+  if (size <= (new_file ? cur_buffer_size : file_size))
+    return;
   size = (size - 1) / WRITE_BUFFER_SIZE + 1;
   size *= WRITE_BUFFER_SIZE;
-  write_buffer = realloc(write_buffer, size);
+  if (new_file) {
+    write_buffer = realloc(write_buffer, size);
+  } else {
+    char *new_buf = malloc(size);
+    memcpy(new_buf, write_buffer, cur_pos);
+    unmap_file();
+    write_buffer = new_buf;
+    new_file = 1;
+  }
   cur_buffer_size = size;
 }
 
@@ -272,6 +282,7 @@ static char *mangle_filename(const char *orig_filename) {
 static int map_file() {
   fseek(output_file, 0L, SEEK_END);
   file_size = ftell(output_file);
+  fseek(output_file, 0L, SEEK_SET);
 
   /* A size of 0 is invalid to `mmap'. Return a fail here, but don't issue an
    * error message because it should "just work" for the user. */
@@ -306,6 +317,7 @@ static int map_file() {
     int errnum = errno;
     fprintf(stderr, "profiling: %s: cannot map: %s\n", filename,
             strerror(errnum));
+    file_size = 0;
     return -1;
   }
 #endif
